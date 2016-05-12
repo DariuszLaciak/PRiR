@@ -1,7 +1,8 @@
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.PriorityBlockingQueue;
 
 
 class Queues implements QueuesInterface {
@@ -10,9 +11,8 @@ class Queues implements QueuesInterface {
     private int[] formerLimits;
     private int globalLimit;
     private int formerGlobalLimit;
-    private Map<Integer, PriorityQueue<TaskRun>> queues = new HashMap<>();
-    private Map<Integer, PriorityQueue<TaskRun>> buffer = new HashMap<>();
-    private boolean addedTask = false;
+    private Map<Integer, PriorityBlockingQueue<TaskRun>> queues = new ConcurrentHashMap<>();
+    private Map<Integer, PriorityBlockingQueue<TaskRun>> buffer = new ConcurrentHashMap<>();
 
     public Queues() {
         checkThreadStates();
@@ -27,25 +27,35 @@ class Queues implements QueuesInterface {
         int index = 0;
         formerLimits = new int[limits.length];
         for (int ignored : limits) {
-            queues.put(index, new PriorityQueue<>());
-            buffer.put(index, new PriorityQueue<>());
+            queues.put(index, new PriorityBlockingQueue<>());
+            buffer.put(index, new PriorityBlockingQueue<>());
             formerLimits[index] = ignored;
             index++;
         }
     }
 
     private void checkThreadStates() {
-//        while (true) {
-            checkTasks();
-            runNextTask();
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (true) {
+                    checkTasks();
+                    runNextTask();
+                }
+            }
+        });
+//        try {
+//            Thread.sleep(1000);
+//        } catch (InterruptedException e) {
+//            e.printStackTrace();
 //        }
+        t.start();
     }
 
     @Override
-    public synchronized void submitTask(int queue, TaskInterface task) {
-        if (queue < limits.length) {
+    public void submitTask(int queue, TaskInterface task) {
+        if (queue < limits.length && queues.get(queue) != null) {
             if (getAvailableCores() >= task.getRequiredCores() && getAvailableCores(queue) >= task.getRequiredCores()) {
-                addedTask = true;
                 limits[queue] -= task.getRequiredCores();
                 globalLimit -= task.getRequiredCores();
                 queues.get(queue).add(new TaskRun(task));
@@ -85,57 +95,57 @@ class Queues implements QueuesInterface {
     }
 
     public void checkTasks() {
-        Thread t = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                Iterator<Integer> it = queues.keySet().iterator();
-                int i = 0;
-                while (it.hasNext() && addedTask) {
-                    checkBuffer(i);
-                    if (queues.get(i) != null) {
-                        Iterator<TaskRun> ittask = queues.get(i).iterator();
-                        while (ittask.hasNext()) {
-                            TaskRun actualTask = queues.get(i).peek();
-                            if (actualTask != null && actualTask.wasRunning() && System.currentTimeMillis() - actualTask.getStartTime() >= actualTask.getExecutionTime()) {
-                                actualTask.cancelTask();
-                                limits[i] += actualTask.getUsedCores();
-                                globalLimit += actualTask.getUsedCores();
-                                queues.get(i).remove(actualTask);
-                            }
-                        }
-                        i++;
+
+        Iterator<PriorityBlockingQueue<TaskRun>> it = queues.values().iterator();
+        int i = 0;
+        while (it.hasNext()) {
+            checkBuffer(i);
+            PriorityBlockingQueue<TaskRun> n = it.next();
+            if (n != null && !n.isEmpty()) {
+                Iterator<TaskRun> ittask = n.iterator();
+                while (ittask.hasNext()) {
+                    TaskRun actualTask = ittask.next();
+                    if (actualTask != null && actualTask.wasRunning() && System.currentTimeMillis() - actualTask.getStartTime() >= actualTask.getExecutionTime()) {
+                        actualTask.cancelTask();
+                        limits[i] += actualTask.getUsedCores();
+                        globalLimit += actualTask.getUsedCores();
+                        ittask.remove();
                     }
                 }
+                i++;
             }
-        });
-        t.start();
+        }
+
     }
 
     private void runNextTask() {
         Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
-                while (true) {
-                    Iterator<Integer> it = queues.keySet().iterator();
-                    int i = 0;
-                    while (it.hasNext()) {
-                        if (queues.get(i) != null && !queues.get(i).isEmpty()) {
-                            System.out.println("Ruruchamianie");
-                            TaskRun t = queues.get(i).peek();
-                            if (t != null && !t.isRunning()) {
-                                t.runTask();
-                            }
+                Iterator<PriorityBlockingQueue<TaskRun>> it = queues.values().iterator();
+                while (it.hasNext()) {
+                    PriorityBlockingQueue<TaskRun> n = it.next();
+                    if (n != null && !n.isEmpty()) {
+                        TaskRun t = n.peek();
+                        if (t != null && !t.isRunning()) {
+                            t.runTask();
+                            n.remove();
                         }
-                        i++;
                     }
                 }
             }
         });
         t.start();
+        try {
+            t.join();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
     }
 }
 
-class TaskRun implements Comparable{
+class TaskRun implements Comparable {
     private QueuesInterface.TaskInterface task;
     private Thread associatedThread;
     private long startTime;
@@ -150,30 +160,36 @@ class TaskRun implements Comparable{
         this.usedCores = task.getRequiredCores();
 
         associatedThread = new Thread(() -> {
-            task.execute(task.getRequiredCores(),task.getRequiredTime());
-            System.out.println("Uruchomiono zadanie");
+            task.execute(task.getRequiredCores(), task.getRequiredTime());
+//            System.out.println("Uruchomiono zadanie");
         });
     }
 
-    public void runTask(){
+    public void runTask() {
         startTime = System.currentTimeMillis();
-        if(!associatedThread.isAlive()) {
-            wasRunning = true;
-            associatedThread.start();
-            this.isRunning = true;
-            try {
-                associatedThread.join();
-            } catch (InterruptedException e) {
-                e.printStackTrace();
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                if (!associatedThread.isAlive()) {
+                    wasRunning = true;
+                    isRunning = true;
+                    associatedThread.start();
+                }
             }
+        });
+        t.start();
+        try {
+            t.join();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
         }
     }
 
-    public void cancelTask(){
+    public void cancelTask() {
         task.cancel();
-        if(associatedThread.isAlive())
+        if (associatedThread.isAlive())
             associatedThread.interrupt();
-            this.isRunning = false;
+        this.isRunning = false;
     }
 
     public long getStartTime() {

@@ -1,4 +1,6 @@
 import java.rmi.RemoteException;
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -64,10 +66,11 @@ public class TaskRMIExecutor extends UnicastRemoteObject implements TaskRMIExecu
 	}
 
 	public static void main(String[] args) throws Exception {
+		Registry reg = LocateRegistry.createRegistry(0);
 		PMO_SystemOutRedirect.startRedirectionToNull();
 		TaskRMIExecutor tre = new TaskRMIExecutor();
 
-		java.rmi.Naming.rebind("SERVER", tre);
+		reg.rebind("SERVER", tre);
 	}
 
 }

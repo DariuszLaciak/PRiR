@@ -6,7 +6,7 @@ import java.rmi.registry.LocateRegistry;
  */
 public class RmiRegistry {
     public static void main(String[] args) throws IOException {
-//        Runtime.getRuntime().exec("rmiregistry 2020");
         LocateRegistry.createRegistry(0);
+//
     }
 }

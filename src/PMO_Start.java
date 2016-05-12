@@ -13,7 +13,7 @@ public class PMO_Start {
 		PMO_SystemOutRedirect.startRedirectionToNull();
 
 		QueuesInterface qi = new Queues();
-//		args = new String[1];
+		args = new String[1];
 		args[0] = "t1";
 		List<String > argl = Arrays.asList( args );
 		
