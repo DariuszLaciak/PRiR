@@ -1,5 +1,6 @@
 import java.util.Iterator;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -15,6 +16,7 @@ class Queues implements QueuesInterface {
     private AtomicInteger formerGlobalLimit = new AtomicInteger();
     private Map<Integer, PriorityBlockingQueue<TaskRun>> queues = new ConcurrentHashMap<>();
     private Map<Integer, PriorityBlockingQueue<TaskRun>> buffer = new ConcurrentHashMap<>();
+    private Map<Integer, PriorityBlockingQueue<TaskRun>> finishedTasks = new ConcurrentHashMap<>();
 
     public Queues() {
         checkThreadStates();
@@ -31,6 +33,7 @@ class Queues implements QueuesInterface {
         for (int ignored : limits) {
             queues.put(index, new PriorityBlockingQueue<>());
             buffer.put(index, new PriorityBlockingQueue<>());
+            finishedTasks.put(index, new PriorityBlockingQueue<>());
             formerLimits[index] = new AtomicInteger(ignored);
             this.limits[index] = new AtomicInteger(ignored);
             index++;
@@ -43,6 +46,7 @@ class Queues implements QueuesInterface {
             public void run() {
                 while (true) {
                     checkTasks();
+                    releaseResources();
                     if(!runNextTask()){
                         try {
                             Thread.sleep(1);
@@ -99,7 +103,7 @@ class Queues implements QueuesInterface {
         return limits[queue].get();
     }
 
-    public void checkTasks() {
+    private void checkTasks() {
 
         Iterator<PriorityBlockingQueue<TaskRun>> it = queues.values().iterator();
         int i = 0;
@@ -116,11 +120,6 @@ class Queues implements QueuesInterface {
                         globalLimit.set(globalLimit.get() +actualTask.getUsedCores() );
                         n.remove(actualTask);
                     }
-                    else if(actualTask.wasRunning() && !actualTask.isRunning()){
-                        limits[i].set(limits[i].get() + actualTask.getUsedCores());
-                        globalLimit.set(globalLimit.get() +actualTask.getUsedCores() );
-                        n.remove(actualTask);
-                    }
                 }
 
             }
@@ -129,23 +128,58 @@ class Queues implements QueuesInterface {
 
     }
 
+    private void releaseResources() {
+        Iterator<PriorityBlockingQueue<TaskRun>> it = finishedTasks.values().iterator();
+        int i = 0;
+        while (it.hasNext()) {
+            PriorityBlockingQueue<TaskRun> n = it.next();
+            if (n != null && !n.isEmpty()) {
+                Iterator<TaskRun> ittask = n.iterator();
+                while (ittask.hasNext()) {
+                    TaskRun actualTask = ittask.next();
+//                    System.out.println("asdasd");
+                    if (actualTask != null && !actualTask.hasFinished()) {
+//                        System.out.println("usuwanie");
+                        limits[i].set(limits[i].get() + actualTask.getUsedCores());
+                        globalLimit.set(globalLimit.get() + actualTask.getUsedCores());
+                        n.remove(actualTask);
+                    }
+                }
+            }
+            i++;
+        }
+    }
+
     private boolean runNextTask() {
         boolean didTheTaskRun = false;
                 Iterator<PriorityBlockingQueue<TaskRun>> it = queues.values().iterator();
+                int i = 0;
                 while (it.hasNext()) {
                     PriorityBlockingQueue<TaskRun> n = it.next();
                     if (n != null && !n.isEmpty()) {
                         TaskRun t = n.peek();
-                        if (t != null ) {
+                        if (t != null && !t.wasRunning() && !t.isRunning()) {
                             t.runTask();
+                            finishedTasks.get(i).add(t);
                             n.remove(t);
                             didTheTaskRun = true;
                         }
                     }
+                    i++;
                 }
         return didTheTaskRun;
 
     }
+//    private boolean isBufferUsed(){
+//        boolean flag = false;
+//        Iterator<PriorityBlockingQueue<TaskRun>> it = buffer.values().iterator();
+//        while(it.hasNext()){
+//            if(it.next().size() != 0){
+//                return true;
+//            }
+//        }
+//        return flag;
+//    }
 }
 
 class TaskRun implements Comparable {
@@ -216,6 +250,10 @@ class TaskRun implements Comparable {
 
     public synchronized boolean wasRunning() {
         return wasRunning.get();
+    }
+
+    public boolean hasFinished(){
+        return System.currentTimeMillis() - startTime.get() <= executionTime.get();
     }
 
     @Override

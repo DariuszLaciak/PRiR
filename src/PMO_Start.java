@@ -14,7 +14,7 @@ public class PMO_Start {
 
 		QueuesInterface qi = new Queues();
 		args = new String[1];
-		args[0] = "t6";
+		args[0] = "t3";
 		List<String > argl = Arrays.asList( args );
 		
 		if ( argl.contains( "t1") ) {
