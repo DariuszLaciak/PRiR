@@ -17,6 +17,7 @@ class Queues implements QueuesInterface {
     private Map<Integer, PriorityBlockingQueue<TaskRun>> queues = new ConcurrentHashMap<>();
     private Map<Integer, PriorityBlockingQueue<TaskRun>> buffer = new ConcurrentHashMap<>();
     private Map<Integer, PriorityBlockingQueue<TaskRun>> finishedTasks = new ConcurrentHashMap<>();
+    private PriorityBlockingQueue<TaskRun> destroy = new PriorityBlockingQueue<>();
 
     public Queues() {
         checkThreadStates();
@@ -47,6 +48,7 @@ class Queues implements QueuesInterface {
                 while (true) {
                     checkTasks();
                     releaseResources();
+                    destroyUnneededTasks();
                     if(!runNextTask()){
                         try {
                             Thread.sleep(1);
@@ -112,14 +114,10 @@ class Queues implements QueuesInterface {
             PriorityBlockingQueue<TaskRun> n = it.next();
             if (n != null && !n.isEmpty()) {
                 Iterator<TaskRun> ittask = n.iterator();
+//                System.out.println(n.size());
                 while (ittask.hasNext()) {
                     TaskRun actualTask = ittask.next();
-                    if (actualTask != null && actualTask.wasRunning() && actualTask.isRunning() && System.currentTimeMillis() - actualTask.getStartTime() >= actualTask.getExecutionTime()) {
-                        actualTask.cancelTask();
-                        limits[i].set(limits[i].get() + actualTask.getUsedCores());
-                        globalLimit.set(globalLimit.get() +actualTask.getUsedCores() );
-                        n.remove(actualTask);
-                    }
+                    actualTask.checkIsOver();
                 }
 
             }
@@ -138,15 +136,33 @@ class Queues implements QueuesInterface {
                 while (ittask.hasNext()) {
                     TaskRun actualTask = ittask.next();
 //                    System.out.println("asdasd");
+                    if(actualTask.checkIsOver()) {
+                        actualTask.setFinished();
+                    }
                     if (actualTask != null && !actualTask.hasFinished()) {
 //                        System.out.println("usuwanie");
                         limits[i].set(limits[i].get() + actualTask.getUsedCores());
                         globalLimit.set(globalLimit.get() + actualTask.getUsedCores());
+//                        actualTask.checkIsOverAndOver();
+
                         n.remove(actualTask);
                     }
+
                 }
             }
             i++;
+        }
+    }
+
+    private void destroyUnneededTasks() {
+        Iterator<TaskRun> it = destroy.iterator();
+        while (it.hasNext()) {
+                    TaskRun actualTask = it.next();
+                    if ( actualTask.getMark()) {
+//                        System.out.println("usuwamy");
+                        actualTask.cancelTask();
+                        it.remove();
+                    }
         }
     }
 
@@ -161,6 +177,7 @@ class Queues implements QueuesInterface {
                         if (t != null && !t.wasRunning() && !t.isRunning()) {
                             t.runTask();
                             finishedTasks.get(i).add(t);
+                            destroy.add(t);
                             n.remove(t);
                             didTheTaskRun = true;
                         }
@@ -190,6 +207,7 @@ class TaskRun implements Comparable {
     private AtomicInteger usedCores = new AtomicInteger();
     private AtomicBoolean isRunning = new AtomicBoolean();
     private AtomicBoolean wasRunning = new AtomicBoolean(false);
+    private AtomicBoolean markToCancel = new AtomicBoolean(false);
 
     public TaskRun(QueuesInterface.TaskInterface task) {
         this.task = task;
@@ -203,33 +221,22 @@ class TaskRun implements Comparable {
     }
 
     public void runTask() {
-        startTime.set(System.currentTimeMillis());
-        Thread t = new Thread(new Runnable() {
-            @Override
-            public void run() {
+
                 if (!associatedThread.isAlive()) {
+                    startTime.set(System.currentTimeMillis());
                         wasRunning.set(true);
                         isRunning.set(true);
                         associatedThread.start();
                 }
-            }
-        });
-        t.start();
-        try {
-            t.join();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
     }
 
     public void cancelTask() {
+                if (associatedThread.isAlive()) {
+                    task.cancel();
 
-        if (associatedThread.isAlive()) {
-            task.cancel();
-            System.out.println("Zakonczono zadanie");
-            associatedThread.interrupt();
-        }
-        this.isRunning.set(false);
+                    associatedThread.interrupt();
+                }
+                isRunning.set(false);
     }
 
     public long getStartTime() {
@@ -254,6 +261,22 @@ class TaskRun implements Comparable {
 
     public boolean hasFinished(){
         return System.currentTimeMillis() - startTime.get() <= executionTime.get();
+    }
+
+    public boolean checkIsOver(){
+        if(isRunning() && System.currentTimeMillis() - startTime.get() > executionTime.get()){
+            return true;
+        }
+        return false;
+    }
+
+    public void setFinished(){
+        isRunning.set(false);
+        markToCancel.set(true);
+    }
+
+    public boolean getMark(){
+        return markToCancel.get();
     }
 
     @Override
